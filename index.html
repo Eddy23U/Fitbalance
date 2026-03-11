@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FitBalance</title>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="FitBalance"/>
+  <meta name="theme-color" content="#6366f1"/>
+  <link rel="manifest" href="manifest.json"/>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0f172a;font-family:system-ui,sans-serif;color:#f1f5f9;}
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button{opacity:1;}
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+const P = { weight:93, height:175, age:33, lbm:61.13, fat:31.87, fatPct:34.3 };
+const AW = P.lbm + P.fat * 0.2;
+const TARGET_DEFICIT = 800;
+const TARGET_STEPS   = 8000;
+
+const SPORTS = [
+  { id:"football",  label:"Football",      icon:"⚽", inputs:["time"] },
+  { id:"football5", label:"Football à 5",  icon:"🥅", inputs:["time"] },
+  { id:"rameur",    label:"Rameur",        icon:"🚣", inputs:["time","rameurType"] },
+  { id:"wod",       label:"WOD CrossFit",  icon:"💪", inputs:["time","wodType"] },
+  { id:"course",    label:"Course",        icon:"🏃", inputs:["time","distance"] },
+  { id:"velo",      label:"Vélo",          icon:"🚴", inputs:["time","distance"] },
+  { id:"natation",  label:"Natation",      icon:"🏊", inputs:["time","distanceM"] },
+  { id:"tennis",    label:"Tennis",        icon:"🎾", inputs:["time"] },
+  { id:"ski",       label:"Ski",           icon:"⛷️", inputs:["time","distance"] },
+  { id:"muscu",     label:"Sport maison",  icon:"🏠", inputs:["muscuType"] },
+  { id:"sexe",      label:"Sexe",          icon:"❤️", inputs:["time"] },
+];
+const RAMEUR_TYPES = [{id:"sprint",label:"Sprint",met:13},{id:"longueur",label:"Longueur",met:7}];
+const WOD_TYPES = [{id:"force",label:"Force",met:7},{id:"cardio",label:"Cardio",met:13},{id:"haltero",label:"Haltérophilie",met:6},{id:"gym",label:"Gymnastique",met:8},{id:"mixte",label:"Mixte",met:10}];
+const MUSCU_TYPES = [
+  {id:"A", label:"Muscu A", icon:"💪",duration:55,met:5.0,desc:"Pectoraux · Épaules · Triceps · Abdos"},
+  {id:"B", label:"Muscu B", icon:"🏋️",duration:55,met:5.0,desc:"Dos · Biceps · Jambes · Abdos"},
+  {id:"A+",label:"Muscu A+",icon:"🔥",duration:70,met:6.5,desc:"Muscu A + Superset intensif + Gainage"},
+  {id:"B+",label:"Muscu B+",icon:"⚡",duration:70,met:6.5,desc:"Muscu B + Superset intensif + Cardio HIIT"},
+];
+const DAYS = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
+const todayIdx = (new Date().getDay()+6)%7;
+
+function getMET(id,p){
+  if(id==="football") return 10; if(id==="football5") return 11.5;
+  if(id==="tennis") return 7.5;  if(id==="sexe") return 3.5;
+  if(id==="rameur") return RAMEUR_TYPES.find(r=>r.id===p.rameurType)?.met||10;
+  if(id==="wod")    return WOD_TYPES.find(w=>w.id===p.wodType)?.met||8;
+  if(id==="course"){const sp=p.distance/(p.time/60);return sp<8?8:sp<10?9.8:sp<12?11.5:13;}
+  if(id==="velo")  {const sp=p.distance/(p.time/60);return sp<15?5.5:sp<20?8:sp<25?10:12;}
+  if(id==="natation"){const sp=(p.distanceM/1000)/(p.time/60);return sp<1.5?6:sp<2.5?8.5:10.5;}
+  if(id==="ski")   {const sp=p.distance/(p.time/60);return sp<15?7:sp<25?9:11;}
+  if(id==="muscu") return MUSCU_TYPES.find(m=>m.id===p.muscuType)?.met||5;
+  return 5;
+}
+function calcKcal(id,p){
+  const timeH=id==="muscu"?(MUSCU_TYPES.find(m=>m.id===p.muscuType)?.duration||55)/60:(p.time||0)/60;
+  if(timeH<=0) return 0;
+  return Math.round(getMET(id,p)*AW*timeH);
+}
+function stepsToKcal(s){return Math.round(3.5*AW*(s/100)/60);}
+function stepsToKm(s){return((s*P.height*0.413)/100000).toFixed(2);}
+function getWeekLabel(offset=0){
+  const d=new Date(); d.setDate(d.getDate()-d.getDay()+1-(offset*7));
+  return `S.${d.getDate()}/${d.getMonth()+1}`;
+}
+
+function DualLineChart({weights,fats}){
+  const hasData=[...weights,...fats].filter(v=>v!==null&&v!==undefined).length>=2;
+  if(!hasData) return <div style={{textAlign:"center",padding:"24px 0",color:"#475569",fontSize:12}}>Pas encore assez de données</div>;
+  const W=300,H=100,padX=32,padY=12,iW=W-padX*2,iH=H-padY*2;
+  const wVals=weights.map(v=>v??null),fVals=fats.map(v=>v??null);
+  const wDef=wVals.filter(v=>v!==null),fDef=fVals.filter(v=>v!==null);
+  const wMin=wDef.length?Math.min(...wDef)-1:80,wMax=wDef.length?Math.max(...wDef)+1:100;
+  const fMin=fDef.length?Math.min(...fDef)-1:25,fMax=fDef.length?Math.max(...fDef)+1:40;
+  const n=weights.length;
+  const xOf=i=>padX+i*(iW/(n-1));
+  const yW=v=>padY+iH-((v-wMin)/(wMax-wMin))*iH;
+  const yF=v=>padY+iH-((v-fMin)/(fMax-fMin))*iH;
+  let wPath="",fPath="",wIn=false,fIn=false;
+  wVals.forEach((v,i)=>{if(v!==null){wPath+=wIn?`L${xOf(i)},${yW(v)}`:`M${xOf(i)},${yW(v)}`;wIn=true;}else wIn=false;});
+  fVals.forEach((v,i)=>{if(v!==null){fPath+=fIn?`L${xOf(i)},${yF(v)}`:`M${xOf(i)},${yF(v)}`;fIn=true;}else fIn=false;});
+  return(
+    <div>
+      <div style={{display:"flex",gap:16,marginBottom:10,fontSize:11}}>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:16,height:3,background:"#a78bfa",borderRadius:2}}/><span style={{color:"#a78bfa"}}>Poids (kg)</span></div>
+        <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:16,height:3,background:"#f59e0b",borderRadius:2}}/><span style={{color:"#f59e0b"}}>% Masse grasse</span></div>
+      </div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H+16}`} style={{overflow:"visible"}}>
+        {[0,0.5,1].map(t=>(
+          <line key={t} x1={padX} y1={padY+iH*t} x2={W-padX} y2={padY+iH*t} stroke="#1e293b" strokeWidth="1"/>
+        ))}
+        <path d={wPath} fill="none" stroke="#a78bfa" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {wVals.map((v,i)=>v!==null&&(
+          <g key={i}>
+            <circle cx={xOf(i)} cy={yW(v)} r="4" fill="#a78bfa"/>
+            <text x={xOf(i)} y={yW(v)-8} textAnchor="middle" fill="#a78bfa" fontSize="8.5" fontWeight="bold">{v}kg</text>
+          </g>
+        ))}
+        <path d={fPath} fill="none" stroke="#f59e0b" strokeWidth="2" strokeDasharray="5,3" strokeLinecap="round" strokeLinejoin="round"/>
+        {fVals.map((v,i)=>v!==null&&(
+          <g key={i}>
+            <circle cx={xOf(i)} cy={yF(v)} r="4" fill="#f59e0b"/>
+            <text x={xOf(i)} y={yF(v)+16} textAnchor="middle" fill="#f59e0b" fontSize="8.5">{v}%</text>
+          </g>
+        ))}
+        {weights.map((_,i)=>(
+          <text key={i} x={xOf(i)} y={H+14} textAnchor="middle" fill="#475569" fontSize="8">{getWeekLabel(n-1-i)}</text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function App(){
+  const [tab,setTab]=useState("activite");
+  const [sport,setSport]=useState(null);
+  const [params,setParams]=useState({});
+  const [log,setLog]=useState(DAYS.map(()=>[]));
+  const [activeDay,setDay]=useState(todayIdx);
+  const [summary,setSummary]=useState(DAYS.map(()=>({calories:"",steps:""})));
+  const [showProfile,setShowProfile]=useState(false);
+  const [weeklyData,setWeeklyData]=useState(Array(6).fill(null).map(()=>({weight:null,fatPct:null,bmr:null})));
+  const [editWeek,setEditWeek]=useState(0);
+
+  const sp=SPORTS.find(s=>s.id===sport);
+  const kcal=sport?calcKcal(sport,params):0;
+  const canAdd=kcal>0;
+  const totalSport=log[activeDay].reduce((a,s)=>a+s.kcal,0);
+  const stepsKcal=stepsToKcal(parseInt(summary[activeDay].steps)||0);
+  const currentBMR=weeklyData[0].bmr||1875;
+  const totalBurned=currentBMR+totalSport+stepsKcal;
+  const consumed=parseInt(summary[activeDay].calories)||0;
+  const balance=consumed-totalBurned;
+  const stepsOk=(parseInt(summary[activeDay].steps)||0)>=TARGET_STEPS;
+  const deficitOk=consumed>0&&balance<=-TARGET_DEFICIT;
+
+  const weekDeficits=DAYS.map((_,i)=>{
+    const sp2=log[i].reduce((a,s)=>a+s.kcal,0);
+    const sk=stepsToKcal(parseInt(summary[i].steps)||0);
+    const dep=(weeklyData[0].bmr||1875)+sp2+sk;
+    const con=parseInt(summary[i].calories)||0;
+    return con>0?(con-dep):null;
+  });
+  const weekSteps=DAYS.map((_,i)=>parseInt(summary[i].steps)||0);
+  const daysWithDeficit=weekDeficits.filter(v=>v!==null&&v<=-TARGET_DEFICIT).length;
+  const daysWithSteps=weekSteps.filter(v=>v>=TARGET_STEPS).length;
+  const avgDeficit=weekDeficits.filter(v=>v!==null).length>0?Math.round(weekDeficits.filter(v=>v!==null).reduce((a,b)=>a+b,0)/weekDeficits.filter(v=>v!==null).length):null;
+  const avgSteps=Math.round(weekSteps.filter(v=>v>0).reduce((a,b)=>a+b,0)/(weekSteps.filter(v=>v>0).length||1));
+  const weightHistory=[...weeklyData].reverse().map(w=>w.weight);
+  const fatHistory=[...weeklyData].reverse().map(w=>w.fatPct);
+
+  function setWD(idx,field,val){setWeeklyData(w=>w.map((x,i)=>i===idx?{...x,[field]:val===''?null:parseFloat(val)}:x));}
+  function setP(k,v){setParams(p=>({...p,[k]:v}));}
+  function setSumField(field,val){setSummary(s=>s.map((d,i)=>i===activeDay?{...d,[field]:val}:d));}
+  function addSession(){
+    if(!sport||kcal===0) return;
+    const label=sp.label+(params.rameurType?` (${RAMEUR_TYPES.find(r=>r.id===params.rameurType)?.label})`:params.wodType?` – ${WOD_TYPES.find(w=>w.id===params.wodType)?.label}`:params.muscuType?` ${params.muscuType}`:"");
+    setLog(l=>l.map((d,i)=>i===activeDay?[...d,{id:Date.now(),sport,icon:sp.icon,label,kcal,params:{...params}}]:d));
+    setSport(null);setParams({});
+  }
+  function removeSession(id){setLog(l=>l.map((d,i)=>i===activeDay?d.filter(s=>s.id!==id):d));}
+
+  const lbl={fontSize:12,color:"#94a3b8",marginBottom:6,display:"block"};
+  const inp={width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:8,padding:"10px",color:"#f1f5f9",fontSize:15,boxSizing:"border-box"};
+  const inpSm={background:"#0f172a",border:"1px solid #334155",borderRadius:8,padding:"8px 10px",color:"#f1f5f9",fontSize:14,width:"100%",boxSizing:"border-box"};
+  const chip=active=>({padding:"8px 14px",borderRadius:10,border:"2px solid",borderColor:active?"#6366f1":"#334155",background:active?"#312e81":"#0f172a",color:active?"#fff":"#94a3b8",cursor:"pointer",fontSize:13,fontWeight:active?700:400});
+
+  const DayBar=()=>(
+    <div style={{display:"flex",gap:5,marginBottom:16}}>
+      {DAYS.map((d,i)=>(
+        <button key={i} onClick={()=>{setDay(i);setSport(null);setParams({});}} style={{flex:1,padding:"8px 2px",borderRadius:10,border:"none",background:activeDay===i?"#6366f1":"#1e293b",color:activeDay===i?"#fff":"#64748b",fontWeight:activeDay===i?700:400,cursor:"pointer",fontSize:12,outline:i===todayIdx?"2px solid #a78bfa":"none"}}>
+          {d}{i===todayIdx&&<div style={{fontSize:8,marginTop:1}}>auj.</div>}
+        </button>
+      ))}
+    </div>
+  );
+
+  function renderInputs(){
+    if(!sp) return null;
+    const has=k=>sp.inputs.includes(k);
+    return(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {has("time")&&<div><label style={lbl}>⏱️ Durée (minutes)</label><input type="number" min="1" placeholder="ex: 45" value={params.time||""} onChange={e=>setP("time",+e.target.value)} style={inp}/></div>}
+        {has("distance")&&<div><label style={lbl}>📏 Distance (km)</label><input type="number" min="0.1" step="0.1" placeholder="ex: 5.5" value={params.distance||""} onChange={e=>setP("distance",+e.target.value)} style={inp}/></div>}
+        {has("distanceM")&&<div><label style={lbl}>📏 Distance (mètres)</label><input type="number" min="100" step="50" placeholder="ex: 1500" value={params.distanceM||""} onChange={e=>setP("distanceM",+e.target.value)} style={inp}/></div>}
+        {has("rameurType")&&<div><label style={lbl}>🎯 Type</label><div style={{display:"flex",gap:8}}>{RAMEUR_TYPES.map(r=><button key={r.id} onClick={()=>setP("rameurType",r.id)} style={chip(params.rameurType===r.id)}>{r.label}</button>)}</div></div>}
+        {has("wodType")&&<div><label style={lbl}>🎯 Type de WOD</label><div style={{display:"flex",flexWrap:"wrap",gap:8}}>{WOD_TYPES.map(w=><button key={w.id} onClick={()=>setP("wodType",w.id)} style={chip(params.wodType===w.id)}>{w.label}</button>)}</div></div>}
+        {has("muscuType")&&<div><label style={lbl}>🎯 Séance</label><div style={{display:"flex",flexDirection:"column",gap:8}}>{MUSCU_TYPES.map(m=><button key={m.id} onClick={()=>setP("muscuType",m.id)} style={{...chip(params.muscuType===m.id),textAlign:"left",display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><span style={{fontWeight:700}}>{m.icon} {m.label}</span><div style={{fontSize:11,color:"#94a3b8",marginTop:2}}>{m.desc}</div></div><div style={{fontSize:11,color:"#a78bfa",marginLeft:8}}>~{m.duration} min</div></button>)}</div></div>}
+      </div>
+    );
+  }
+
+  const cur=weeklyData[0],prev=weeklyData[1];
+  const weightDiff=cur.weight&&prev.weight?+(cur.weight-prev.weight).toFixed(1):null;
+  const fatDiff=cur.fatPct&&prev.fatPct?+(cur.fatPct-prev.fatPct).toFixed(1):null;
+
+  return(
+    <div style={{fontFamily:"system-ui,sans-serif",background:"#0f172a",minHeight:"100vh",color:"#f1f5f9",paddingBottom:40}}>
+      <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",padding:"18px 16px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:22,fontWeight:800}}>💪 FitBalance</div>
+            <div style={{fontSize:12,opacity:0.85,marginTop:2}}>Calories brûlées par activité</div>
+          </div>
+          <button onClick={()=>setShowProfile(!showProfile)} style={{background:"rgba(255,255,255,0.15)",border:"none",borderRadius:10,padding:"8px 12px",color:"#fff",cursor:"pointer",fontSize:12}}>👤 Profil</button>
+        </div>
+        {showProfile&&(
+          <div style={{marginTop:12,background:"rgba(0,0,0,0.2)",borderRadius:12,padding:12,fontSize:12,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+            {[["Poids","93 kg"],["Taille","175 cm"],["Âge","33 ans"],["Masse maigre","61.1 kg"],["Masse grasse","31.9 kg"],["BMR actuel",`${currentBMR} kcal`]].map(([k,v])=>(
+              <div key={k}><div style={{opacity:0.7}}>{k}</div><div style={{fontWeight:700}}>{v}</div></div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{display:"flex",background:"#1e293b",borderBottom:"1px solid #0f172a"}}>
+        {[["activite","🏅 Activité"],["resume","📋 Résumé"],["semaine","📊 Semaine"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"12px 4px",border:"none",background:"none",color:tab===id?"#a78bfa":"#64748b",fontWeight:tab===id?700:400,borderBottom:tab===id?"2px solid #a78bfa":"2px solid transparent",cursor:"pointer",fontSize:13}}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{padding:16}}>
+
+        {tab==="activite"&&<>
+          <DayBar/>
+          {log[activeDay].length>0&&(
+            <div style={{marginBottom:14}}>
+              <div style={{fontSize:13,color:"#94a3b8",fontWeight:600,marginBottom:8}}>📋 Séances enregistrées</div>
+              {log[activeDay].map(s=>(
+                <div key={s.id} style={{background:"#1e293b",borderRadius:12,padding:"12px 14px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:22}}>{s.icon}</span>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:13}}>{s.label}</div>
+                      {s.params.time&&<div style={{fontSize:11,color:"#64748b"}}>{s.params.time} min{s.params.distance?` · ${s.params.distance} km`:""}{s.params.distanceM?` · ${s.params.distanceM} m`:""}</div>}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:20,fontWeight:800,color:"#a78bfa"}}>{s.kcal}</div><div style={{fontSize:10,color:"#64748b"}}>kcal</div></div>
+                    <button onClick={()=>removeSession(s.id)} style={{background:"#0f172a",border:"1px solid #334155",borderRadius:8,color:"#f87171",cursor:"pointer",padding:"5px 8px",fontSize:12}}>✕</button>
+                  </div>
+                </div>
+              ))}
+              <div style={{background:"#1e293b",borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:"3px solid #6366f1"}}>
+                <span style={{fontSize:13,color:"#94a3b8"}}>Total sport du jour</span>
+                <span style={{fontWeight:800,color:"#a78bfa",fontSize:18}}>{totalSport} kcal</span>
+              </div>
+            </div>
+          )}
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,marginBottom:12,fontSize:15}}>➕ Ajouter une activité</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              {SPORTS.map(s=>(
+                <button key={s.id} onClick={()=>{setSport(s.id);setParams({});}} style={{padding:"12px 4px",borderRadius:12,border:"2px solid",borderColor:sport===s.id?"#6366f1":"#334155",background:sport===s.id?"#312e81":"#0f172a",color:sport===s.id?"#fff":"#94a3b8",cursor:"pointer",fontSize:11,fontWeight:sport===s.id?700:400}}>
+                  <div style={{fontSize:20,marginBottom:4}}>{s.icon}</div>{s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {sport&&<div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}><div style={{fontWeight:700,marginBottom:12,fontSize:15}}>{sp.icon} {sp.label} — Paramètres</div>{renderInputs()}</div>}
+          {sport&&kcal>0&&(
+            <div style={{background:"linear-gradient(135deg,#1e293b,#0f172a)",border:"2px solid #6366f1",borderRadius:16,padding:20,marginBottom:12,textAlign:"center"}}>
+              <div style={{fontSize:13,color:"#94a3b8",marginBottom:4}}>Calories estimées</div>
+              <div style={{fontSize:52,fontWeight:900,color:"#a78bfa",lineHeight:1}}>{kcal}</div>
+              <div style={{fontSize:16,color:"#64748b",marginBottom:6}}>kcal</div>
+              <div style={{fontSize:12,color:"#475569"}}>MET {getMET(sport,params).toFixed(1)} × {AW.toFixed(1)} kg</div>
+              {sport==="course"&&params.time&&params.distance&&<div style={{marginTop:6,fontSize:12,color:"#a78bfa"}}>Allure : {(params.time/params.distance).toFixed(1)} min/km · {((params.distance/params.time)*60).toFixed(1)} km/h</div>}
+              {sport==="velo"&&params.time&&params.distance&&<div style={{marginTop:6,fontSize:12,color:"#a78bfa"}}>Vitesse : {((params.distance/params.time)*60).toFixed(1)} km/h</div>}
+            </div>
+          )}
+          {sport&&<button onClick={addSession} disabled={!canAdd} style={{width:"100%",padding:"14px",borderRadius:12,border:"none",background:canAdd?"linear-gradient(135deg,#6366f1,#8b5cf6)":"#1e293b",color:canAdd?"#fff":"#475569",fontWeight:700,cursor:canAdd?"pointer":"not-allowed",fontSize:15}}>{canAdd?`✅ Enregistrer — ${kcal} kcal`:"Remplis les champs pour calculer"}</button>}
+        </>}
+
+        {tab==="resume"&&<>
+          <DayBar/>
+          <div style={{background:"#1e293b",borderRadius:16,padding:"14px 16px",marginBottom:12,display:"flex",justifyContent:"center",gap:32,alignItems:"center"}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:36,filter:stepsOk?"none":"grayscale(1) opacity(0.3)"}}>🦶</div>
+              <div style={{fontSize:11,marginTop:4,color:stepsOk?"#4ade80":"#475569",fontWeight:600}}>8 000 pas</div>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:36,filter:deficitOk?"none":"grayscale(1) opacity(0.3)"}}>🔥</div>
+              <div style={{fontSize:11,marginTop:4,color:deficitOk?"#4ade80":"#475569",fontWeight:600}}>Déficit 800 kcal</div>
+            </div>
+          </div>
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,marginBottom:14,fontSize:15}}>✏️ Saisie du jour</div>
+            <div style={{marginBottom:14}}>
+              <label style={lbl}>🍽️ Calories consommées (kcal)</label>
+              <input type="number" min="0" placeholder="ex: 2200" value={summary[activeDay].calories} onChange={e=>setSumField("calories",e.target.value)} style={inp}/>
+            </div>
+            <div>
+              <label style={lbl}>👟 Nombre de pas</label>
+              <input type="number" min="0" step="100" placeholder="ex: 8000" value={summary[activeDay].steps} onChange={e=>setSumField("steps",e.target.value)} style={inp}/>
+              {(parseInt(summary[activeDay].steps)||0)>0&&(
+                <div style={{marginTop:6,display:"flex",gap:12,fontSize:12,color:"#a78bfa"}}>
+                  <span>≈ {stepsToKm(parseInt(summary[activeDay].steps))} km</span>
+                  <span>≈ {stepsKcal} kcal</span>
+                </div>
+              )}
+            </div>
+          </div>
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,marginBottom:14,fontSize:15}}>⚖️ Bilan calorique</div>
+            {[{label:"🔥 Métabolisme basal",val:currentBMR,color:"#94a3b8"},{label:"🏅 Sport & activités",val:totalSport,color:"#818cf8"},{label:"👟 Marche (pas)",val:stepsKcal,color:"#818cf8"}].map(r=>(
+              <div key={r.label} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:"1px solid #0f172a"}}>
+                <span style={{fontSize:13,color:"#94a3b8"}}>{r.label}</span>
+                <span style={{fontWeight:700,color:r.color}}>{r.val} kcal</span>
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #0f172a"}}>
+              <span style={{fontSize:13,fontWeight:700}}>Total dépenses</span>
+              <span style={{fontWeight:800,fontSize:16,color:"#f87171"}}>{totalBurned} kcal</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #0f172a"}}>
+              <span style={{fontSize:13,fontWeight:700}}>🍽️ Calories consommées</span>
+              <span style={{fontWeight:800,fontSize:16,color:"#4ade80"}}>{consumed||"—"} kcal</span>
+            </div>
+            {consumed>0&&(()=>{
+              const isDeficit=balance<0,abs=Math.abs(balance),pct=Math.min(100,Math.round((consumed/totalBurned)*100));
+              const col=isDeficit?"#4ade80":balance<200?"#facc15":"#f87171";
+              const msg=isDeficit?`✅ Déficit de ${abs} kcal`:balance<200?`⚖️ Quasi équilibre (+${abs} kcal)`:`⚠️ Surplus de ${abs} kcal`;
+              return(<>
+                <div style={{padding:"12px 0 4px"}}>
+                  <div style={{background:"#0f172a",borderRadius:99,height:10,marginBottom:8}}><div style={{width:`${pct}%`,background:col,height:10,borderRadius:99,transition:"width 0.4s"}}/></div>
+                  <div style={{textAlign:"center",fontSize:13,fontWeight:700,color:col}}>{msg}</div>
+                </div>
+                <div style={{marginTop:12,background:"#0f172a",borderRadius:12,padding:14,textAlign:"center"}}>
+                  <div style={{fontSize:12,color:"#64748b",marginBottom:4}}>Balance nette</div>
+                  <div style={{fontSize:40,fontWeight:900,color:col,lineHeight:1}}>{isDeficit?"-":"+"}{abs}</div>
+                  <div style={{fontSize:13,color:"#64748b",marginTop:4}}>kcal</div>
+                  {isDeficit&&abs>=TARGET_DEFICIT&&<div style={{marginTop:6,fontSize:12,color:"#4ade80",fontWeight:700}}>🎯 Objectif déficit 800 kcal atteint !</div>}
+                  {isDeficit&&abs<TARGET_DEFICIT&&<div style={{marginTop:6,fontSize:12,color:"#facc15"}}>🎯 Encore {TARGET_DEFICIT-abs} kcal pour atteindre l'objectif</div>}
+                </div>
+              </>);
+            })()}
+          </div>
+          {log[activeDay].length>0&&(
+            <div style={{background:"#1e293b",borderRadius:16,padding:16}}>
+              <div style={{fontWeight:700,marginBottom:10,fontSize:15}}>🏅 Activités du jour</div>
+              {log[activeDay].map(s=>(
+                <div key={s.id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #0f172a"}}>
+                  <span style={{fontSize:13,color:"#94a3b8"}}>{s.icon} {s.label}</span>
+                  <span style={{fontWeight:700,color:"#a78bfa"}}>{s.kcal} kcal</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>}
+
+        {tab==="semaine"&&<>
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>⚖️ Pesée du lundi</div>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:14}}>À saisir le lundi matin, à jeun</div>
+            <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+              {weeklyData.map((_,i)=>(
+                <button key={i} onClick={()=>setEditWeek(i)} style={{padding:"6px 10px",borderRadius:8,border:"2px solid",borderColor:editWeek===i?"#6366f1":"#334155",background:editWeek===i?"#312e81":"#0f172a",color:editWeek===i?"#fff":"#64748b",cursor:"pointer",fontSize:12,fontWeight:editWeek===i?700:400}}>
+                  {i===0?"Cette sem.":i===1?"Sem. préc.":getWeekLabel(i)}
+                </button>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+              <div><label style={lbl}>⚖️ Poids (kg)</label><input type="number" step="0.1" placeholder="ex: 92.5" value={weeklyData[editWeek].weight??""} onChange={e=>setWD(editWeek,"weight",e.target.value)} style={inpSm}/></div>
+              <div><label style={lbl}>💉 % Graisse</label><input type="number" step="0.1" placeholder="ex: 33.5" value={weeklyData[editWeek].fatPct??""} onChange={e=>setWD(editWeek,"fatPct",e.target.value)} style={inpSm}/></div>
+              <div><label style={lbl}>🔥 BMR (kcal)</label><input type="number" step="1" placeholder="ex: 1875" value={weeklyData[editWeek].bmr??""} onChange={e=>setWD(editWeek,"bmr",e.target.value)} style={inpSm}/></div>
+            </div>
+          </div>
+
+          {(cur.weight||cur.fatPct)&&(
+            <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>📊 Comparatif vs semaine précédente</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {cur.weight&&(
+                  <div style={{background:"#0f172a",borderRadius:12,padding:14,textAlign:"center"}}>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Poids actuel</div>
+                    <div style={{fontSize:28,fontWeight:900,color:"#a78bfa"}}>{cur.weight}<span style={{fontSize:14}}>kg</span></div>
+                    {weightDiff!==null&&<div style={{marginTop:6,fontSize:13,fontWeight:700,color:weightDiff<0?"#4ade80":weightDiff>0?"#f87171":"#facc15"}}>{weightDiff<0?`▼ ${Math.abs(weightDiff)} kg`:weightDiff>0?`▲ ${weightDiff} kg`:"= Stable"}</div>}
+                    {!prev.weight&&<div style={{fontSize:11,color:"#475569",marginTop:4}}>Pas de S. préc.</div>}
+                  </div>
+                )}
+                {cur.fatPct&&(
+                  <div style={{background:"#0f172a",borderRadius:12,padding:14,textAlign:"center"}}>
+                    <div style={{fontSize:11,color:"#64748b",marginBottom:4}}>% Masse grasse</div>
+                    <div style={{fontSize:28,fontWeight:900,color:"#f59e0b"}}>{cur.fatPct}<span style={{fontSize:14}}>%</span></div>
+                    {fatDiff!==null&&<div style={{marginTop:6,fontSize:13,fontWeight:700,color:fatDiff<0?"#4ade80":fatDiff>0?"#f87171":"#facc15"}}>{fatDiff<0?`▼ ${Math.abs(fatDiff)}%`:fatDiff>0?`▲ ${fatDiff}%`:"= Stable"}</div>}
+                    {!prev.fatPct&&<div style={{fontSize:11,color:"#475569",marginTop:4}}>Pas de S. préc.</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:14}}>🎯 Objectifs de la semaine</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+              <div style={{background:"#0f172a",borderRadius:12,padding:14,textAlign:"center"}}>
+                <div style={{fontSize:28}}>{daysWithSteps>=5?"🟢":daysWithSteps>=3?"🟡":"⚫"}</div>
+                <div style={{fontSize:20,fontWeight:900,color:"#60a5fa",marginTop:4}}>{daysWithSteps}<span style={{fontSize:13,color:"#64748b"}}>/7</span></div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>8 000 pas/jour</div>
+              </div>
+              <div style={{background:"#0f172a",borderRadius:12,padding:14,textAlign:"center"}}>
+                <div style={{fontSize:28}}>{daysWithDeficit>=5?"🟢":daysWithDeficit>=3?"🟡":"⚫"}</div>
+                <div style={{fontSize:20,fontWeight:900,color:"#4ade80",marginTop:4}}>{daysWithDeficit}<span style={{fontSize:13,color:"#64748b"}}>/7</span></div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:2}}>Déficit 800 kcal</div>
+              </div>
+            </div>
+            {avgDeficit!==null&&(
+              <div style={{background:"#0f172a",borderRadius:10,padding:10,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:13,color:"#94a3b8"}}>Déficit moyen</span>
+                <span style={{fontWeight:700,color:avgDeficit<=-TARGET_DEFICIT?"#4ade80":avgDeficit<0?"#facc15":"#f87171"}}>{avgDeficit>0?"+":""}{avgDeficit} kcal</span>
+              </div>
+            )}
+            {avgSteps>0&&(
+              <div style={{background:"#0f172a",borderRadius:10,padding:10,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:13,color:"#94a3b8"}}>Pas moyens / jour</span>
+                <span style={{fontWeight:700,color:avgSteps>=TARGET_STEPS?"#4ade80":"#facc15"}}>{avgSteps.toLocaleString()} pas</span>
+              </div>
+            )}
+          </div>
+
+          <div style={{background:"#1e293b",borderRadius:16,padding:16,marginBottom:12}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>📈 Évolution poids & masse grasse</div>
+            <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>6 dernières semaines</div>
+            <DualLineChart weights={weightHistory} fats={fatHistory}/>
+          </div>
+
+          <div style={{background:"#1e293b",borderRadius:16,padding:16}}>
+            <div style={{fontWeight:700,fontSize:15,marginBottom:12}}>📋 Détail de la semaine</div>
+            {DAYS.map((day,i)=>{
+              const sp2=log[i].reduce((a,s)=>a+s.kcal,0);
+              const sk=stepsToKcal(parseInt(summary[i].steps)||0);
+              const dep=(weeklyData[0].bmr||1875)+sp2+sk;
+              const con=parseInt(summary[i].calories)||0;
+              const bal=con>0?con-dep:null;
+              const steps=parseInt(summary[i].steps)||0;
+              const sOk=steps>=TARGET_STEPS;
+              const dOk=bal!==null&&bal<=-TARGET_DEFICIT;
+              return(
+                <div key={i} style={{padding:"10px 0",borderBottom:"1px solid #0f172a"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontWeight:700,fontSize:13,color:i===todayIdx?"#a78bfa":"#f1f5f9",minWidth:30}}>{day}</span>
+                      <span style={{fontSize:14,filter:sOk?"none":"grayscale(1) opacity(0.3)"}}>🦶</span>
+                      <span style={{fontSize:14,filter:dOk?"none":"grayscale(1) opacity(0.3)"}}>🔥</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      {steps>0&&<span style={{fontSize:11,color:"#64748b"}}>{steps.toLocaleString()}👟</span>}
+                      {bal!==null&&<span style={{fontSize:12,fontWeight:700,color:bal<=-TARGET_DEFICIT?"#4ade80":bal<0?"#facc15":"#f87171"}}>{bal>0?"+":""}{bal} kcal</span>}
+                      {bal===null&&<span style={{fontSize:11,color:"#334155"}}>—</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
