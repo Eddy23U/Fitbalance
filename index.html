@@ -25,7 +25,12 @@
 const { useState } = React;
 
 const P = { weight:93, height:175, age:33, lbm:61.13, fat:31.87, fatPct:34.3 };
-const AW = P.lbm + P.fat * 0.2;
+// AW calculé dynamiquement depuis les données de pesée
+function getAW(muscle, weight){
+  const lbm = muscle || P.lbm;
+  const fat  = weight ? (weight - lbm) : P.fat;
+  return lbm + fat * 0.2;
+}
 const TARGET_DEFICIT = 800;
 const TARGET_STEPS   = 8000;
 
@@ -138,7 +143,7 @@ function App(){
   const [activeDay,setDay]=useState(todayIdx);
   const [summary,setSummary]=useState(()=>load("fb_summary", DAYS.map(()=>({calories:"",steps:""}))));
   const [showProfile,setShowProfile]=useState(false);
-  const [weeklyData,setWeeklyData]=useState(()=>load("fb_weekly", Array(6).fill(null).map(()=>({weight:null,fatPct:null,bmr:null}))));
+  const [weeklyData,setWeeklyData]=useState(()=>load("fb_weekly", Array(6).fill(null).map(()=>({weight:null,muscle:null,fatPct:null,bmr:null}))));
   const [editWeek,setEditWeek]=useState(0);
 
   // Auto-save à chaque changement
@@ -146,12 +151,22 @@ function App(){
   React.useEffect(()=>save("fb_summary", summary), [summary]);
   React.useEffect(()=>save("fb_weekly", weeklyData), [weeklyData]);
 
+  // Données dynamiques depuis la dernière pesée
+  const curW   = weeklyData[0];
+  const dynWeight  = curW.weight  || P.weight;
+  const dynMuscle  = curW.muscle  || P.lbm;
+  const dynFatPct  = curW.fatPct  || P.fatPct;
+  const dynFat     = dynWeight - dynMuscle;
+  const dynAW      = getAW(dynMuscle, dynWeight);
+  const dynBMR     = curW.bmr     || 1875;
+
   const sp=SPORTS.find(s=>s.id===sport);
-  const kcal=sport?calcKcal(sport,params):0;
+  // calcKcal utilise dynAW au lieu d'AW fixe
+  const kcal=sport?Math.round(getMET(sport,params)*dynAW*((sport==="muscu"?(MUSCU_TYPES.find(m=>m.id===params.muscuType)?.duration||55)/60:(params.time||0)/60))):0;
   const canAdd=kcal>0;
   const totalSport=log[activeDay].reduce((a,s)=>a+s.kcal,0);
-  const stepsKcal=stepsToKcal(parseInt(summary[activeDay].steps)||0);
-  const currentBMR=weeklyData[0].bmr||1875;
+  const stepsKcal=Math.round(3.5*dynAW*((parseInt(summary[activeDay].steps)||0)/100)/60);
+  const currentBMR=dynBMR;
   const totalBurned=currentBMR+totalSport+stepsKcal;
   const consumed=parseInt(summary[activeDay].calories)||0;
   const balance=consumed-totalBurned;
@@ -230,7 +245,7 @@ function App(){
         </div>
         {showProfile&&(
           <div style={{marginTop:12,background:"rgba(0,0,0,0.2)",borderRadius:12,padding:12,fontSize:12,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
-            {[["Poids","93 kg"],["Taille","175 cm"],["Âge","33 ans"],["Masse maigre","61.1 kg"],["Masse grasse","31.9 kg"],["BMR actuel",`${currentBMR} kcal`]].map(([k,v])=>(
+            {[["Poids",`${dynWeight} kg`],["Taille","175 cm"],["Âge","33 ans"],["Muscle",`${dynMuscle} kg`],["Masse grasse",`${dynFat.toFixed(1)} kg (${dynFatPct}%)`],["BMR actuel",`${dynBMR} kcal`]].map(([k,v])=>(
               <div key={k}><div style={{opacity:0.7}}>{k}</div><div style={{fontWeight:700}}>{v}</div></div>
             ))}
           </div>
@@ -393,11 +408,20 @@ function App(){
                 </button>
               ))}
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               <div><label style={lbl}>⚖️ Poids (kg)</label><input type="number" step="0.1" placeholder="ex: 92.5" value={weeklyData[editWeek].weight??""} onChange={e=>setWD(editWeek,"weight",e.target.value)} style={inpSm}/></div>
+              <div><label style={lbl}>💪 Muscle (kg)</label><input type="number" step="0.1" placeholder="ex: 61.0" value={weeklyData[editWeek].muscle??""} onChange={e=>setWD(editWeek,"muscle",e.target.value)} style={inpSm}/></div>
               <div><label style={lbl}>💉 % Graisse</label><input type="number" step="0.1" placeholder="ex: 33.5" value={weeklyData[editWeek].fatPct??""} onChange={e=>setWD(editWeek,"fatPct",e.target.value)} style={inpSm}/></div>
               <div><label style={lbl}>🔥 BMR (kcal)</label><input type="number" step="1" placeholder="ex: 1875" value={weeklyData[editWeek].bmr??""} onChange={e=>setWD(editWeek,"bmr",e.target.value)} style={inpSm}/></div>
             </div>
+            {/* Résumé calculé de la pesée */}
+            {weeklyData[editWeek].weight && weeklyData[editWeek].muscle && (
+              <div style={{marginTop:12,background:"#0f172a",borderRadius:10,padding:10,display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,fontSize:12,textAlign:"center"}}>
+                <div><div style={{color:"#64748b"}}>Masse grasse</div><div style={{fontWeight:700,color:"#f87171"}}>{(weeklyData[editWeek].weight-weeklyData[editWeek].muscle).toFixed(1)} kg</div></div>
+                <div><div style={{color:"#64748b"}}>% Muscle</div><div style={{fontWeight:700,color:"#4ade80"}}>{((weeklyData[editWeek].muscle/weeklyData[editWeek].weight)*100).toFixed(1)}%</div></div>
+                <div><div style={{color:"#64748b"}}>Poids ajusté</div><div style={{fontWeight:700,color:"#a78bfa"}}>{getAW(weeklyData[editWeek].muscle,weeklyData[editWeek].weight).toFixed(1)} kg</div></div>
+              </div>
+            )}
           </div>
 
           {(cur.weight||cur.fatPct)&&(
