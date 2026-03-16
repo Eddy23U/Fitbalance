@@ -222,9 +222,7 @@ function App() {
     // On recalcule le lundi d'aujourd'hui
     const d=new Date();
     const diff=(d.getDay()===0?-6:1-d.getDay());
-    d.setDate(d.getDate()+diff);
-    // Prochain lundi = +7 jours
-    d.setDate(d.getDate()+7);
+    d.setDate(d.getDate()+diff); // lundi de cette semaine
     newWeek.weekStart = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 
     setWeeklyData(prev=>[newWeek,...prev].slice(0,8));
